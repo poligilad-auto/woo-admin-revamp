@@ -1,21 +1,23 @@
 {
-  "name": "custom-dashboard-widgets",
+  "name": "future-woo",
   "version": "1.0.0",
-  "description": "Custom WooCommerce dashboard widgets with CIAB-style modern settings prototype",
+  "description": "A designer's vision of where WooCommerce admin could go — install on any WP store to see the future of Woo holistically.",
   "private": true,
   "scripts": {
     "build": "wp-scripts build src/settings/index.js --output-path=assets/js/settings --output-filename=settings-general.js",
     "start": "wp-scripts start src/settings/index.js --output-path=assets/js/settings --output-filename=settings-general.js",
-    "lint:js": "wp-scripts lint-js src/"
+    "lint:js": "wp-scripts lint-js src/",
+    "sync:woo": "node scripts/woo-intake.mjs discover",
+    "test:woo-intake": "node --test tests/woo-intake.test.mjs"
   },
   "dependencies": {
-    "@wordpress/api-fetch": "*",
-    "@wordpress/components": "*",
-    "@wordpress/element": "*",
-    "@wordpress/hooks": "*",
-    "@wordpress/i18n": "*"
+    "@wordpress/api-fetch": "^7.42.0",
+    "@wordpress/components": "^32.4.0",
+    "@wordpress/element": "^6.42.0",
+    "@wordpress/hooks": "^4.42.0",
+    "@wordpress/i18n": "^6.15.0"
   },
   "devDependencies": {
-    "@wordpress/scripts": "*"
+    "@wordpress/scripts": "^31.7.0"
   }
 }

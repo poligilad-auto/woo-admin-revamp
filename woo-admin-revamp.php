@@ -1,7 +1,7 @@
 <?php
 /**
- * Plugin Name: WooCommerce Admin Revamp
- * Description: Modernizes the WooCommerce admin experience — custom dashboard widgets, drilldown navigation, redesigned order page, and state switcher for prototyping.
+ * Plugin Name: Future Woo
+ * Description: A designer's vision of where WooCommerce admin could go — redesigned dashboard, modern settings, reimagined order view, unified admin bar, and a state switcher for demoing three store states. Prototype only.
  * Version: 2.1.0
  * Requires Plugins: woocommerce
  * Text Domain: woo-admin-revamp
@@ -14,6 +14,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 define( 'WAR_VERSION', '2.1.0' );
 define( 'WAR_PATH', plugin_dir_path( __FILE__ ) );
 define( 'WAR_URL', plugin_dir_url( __FILE__ ) );
+
+// Prototype-first Woo feature flags.
+require_once WAR_PATH . 'includes/class-feature-flag-overrides.php';
+WAR_Feature_Flag_Overrides::init();
 
 // Enable the React-based order view in WooCommerce core's Edit.php.
 if ( ! defined( 'WC_USE_REACT_ORDER_VIEW' ) ) {
@@ -147,6 +151,19 @@ require_once WAR_PATH . 'includes/class-stats-widget.php';
 require_once WAR_PATH . 'includes/class-store-status-widget.php';
 require_once WAR_PATH . 'includes/class-store-management-widget.php';
 
+// --- Vendored: nested admin navigation (from WC PR #64712) ---
+// See includes/vendor/nested-nav/README.md for provenance + adaptations.
+// Manual require loop because the plugin has no PSR-4 autoloader.
+foreach ( glob( WAR_PATH . 'includes/vendor/nested-nav/*.php' ) as $war_nested_nav_file ) {
+	require_once $war_nested_nav_file;
+}
+unset( $war_nested_nav_file );
+new \FutureWoo\Vendor\NestedNav\Bootstrap();
+
+// --- Future Woo's customization of the vendored nav tree ---
+require_once WAR_PATH . 'includes/class-nav-tree-customizer.php';
+WAR_Nav_Tree_Customizer::init();
+
 // --- Hook registration ---
 
 // AJAX handlers and state switcher always load (so you can toggle the plugin back on).
@@ -184,24 +201,20 @@ add_action( 'admin_init', function() {
 	if ( WAR_Admin_Experience_API::is_store_menu_enabled() ) {
 		WAR_Admin_Bar_Menu::init();
 	}
-	// Only register our widgets on WP dashboard if "default to store" is off.
-	// When on, widgets live on the Store Dashboard page instead.
-	if ( ! WAR_Admin_Experience_API::is_default_to_store() ) {
-		add_action( 'wp_dashboard_setup', 'cdw_register_widgets' );
-	}
-	// Always remove WooCommerce's default dashboard widgets (ours replace them).
-	add_action( 'wp_dashboard_setup', function() {
-		remove_meta_box( 'woocommerce_dashboard_status', 'dashboard', 'normal' );
-		remove_meta_box( 'wc_admin_dashboard_setup', 'dashboard', 'normal' );
-		remove_meta_box( 'woocommerce_dashboard_recent_reviews', 'dashboard', 'normal' );
-	}, 99 );
+	// Note: previously, when "default to store" was OFF, Future Woo's
+	// Store widgets were injected into the WP Dashboard. Removed — the WP
+	// Dashboard should stay clean WP. The Store widgets are still rendered
+	// on the war-store-dashboard page (see class-store-dashboard.php), now
+	// reachable via the WooCommerce rail's "Home" item.
+	// cdw_register_widgets() function below also removed for the same reason.
 
 	add_filter( 'get_user_option_screen_layout_dashboard', 'cdw_force_four_columns' );
 	add_filter( 'get_user_option_meta-box-order_dashboard', 'cdw_force_widget_position' );
-	add_action( 'admin_menu', 'cdw_remove_wc_home', 99 );
-	add_action( 'admin_head', 'cdw_hide_wc_home_link' );
+	// Note: cdw_* drilldown-nav hooks (cdw_remove_wc_home / cdw_hide_wc_home_link
+	// / cdw_rearrange_admin_menu_js) retired here — superseded by the vendored
+	// nested-nav from WC PR #64712 (includes/vendor/nested-nav/). Their function
+	// definitions were removed below.
 	add_action( 'admin_head', 'war_woo_page_background' );
-	add_action( 'admin_footer', 'cdw_rearrange_admin_menu_js' );
 	add_action( 'current_screen', 'cdw_block_product_redirect', 5 );
 	add_action( 'admin_init', 'cdw_redirect_wc_home' );
 	add_action( 'admin_enqueue_scripts', 'cdw_enqueue_assets' );
@@ -400,399 +413,6 @@ function cdw_force_widget_position( $order ) {
 	return $order;
 }
 
-// --- Dashboard widgets ---
-
-function cdw_register_widgets() {
-	remove_meta_box( 'woocommerce_dashboard_status', 'dashboard', 'normal' );
-	remove_meta_box( 'wc_admin_dashboard_setup', 'dashboard', 'normal' );
-
-	// CDW_State_Switcher FAB is now handled by WAR_Unified_State_Switcher.
-	// Body class for redesign is registered globally (see top of file).
-
-	CDW_Woo_Inbox_Widget::register();
-	CDW_Whats_Next_Widget::register();
-	CDW_Woo_Setup_Widget::register();
-	CDW_Stats_Widget::register();
-	CDW_Store_Status_Widget::register();
-	CDW_Store_Management_Widget::register();
-}
-
-// --- WooCommerce menu customization ---
-
-function cdw_remove_wc_home() {
-	remove_submenu_page( 'woocommerce', 'wc-setup' );
-}
-
-function cdw_hide_wc_home_link() {
-	?>
-	<style>
-		/* Hide wc-admin "Home" from WooCommerce submenu */
-		#toplevel_page_woocommerce .wp-submenu a[href="admin.php?page=wc-admin"] { display: none; }
-
-		/* Hide WooCommerce submenu flyout in main nav (not in drilldown) */
-		#adminmenu:not(.cdw-drilldown-open) #toplevel_page_woocommerce .wp-submenu {
-			display: none !important;
-		}
-
-		/* In main view: hide commerce items and adjacent separators */
-		#adminmenu .cdw-woo-item { display: none; }
-		#adminmenu .cdw-woo-sep { display: none; }
-
-		/* In drilldown view: show only drilldown items */
-		#adminmenu.cdw-drilldown-open > li { display: none !important; }
-		#adminmenu.cdw-drilldown-open > li.cdw-woo-item { display: block !important; }
-		#adminmenu.cdw-drilldown-open > li.cdw-woo-promoted { display: block !important; }
-		#adminmenu.cdw-drilldown-open > #cdw-back-item { display: block !important; }
-
-		/* Back button: hidden by default, shown only in drilldown */
-		#cdw-back-item { display: none; }
-
-		/* Drilldown header: hidden by default, shown only in drilldown */
-		#cdw-drilldown-header { display: none; }
-		#adminmenu.cdw-drilldown-open > #cdw-drilldown-header { display: block !important; }
-		#cdw-drilldown-header {
-			pointer-events: none;
-			cursor: default;
-		}
-		.cdw-drilldown-header__label {
-			padding: 8px 12px;
-			font-size: 13px;
-			font-weight: 400;
-			color: #a7aaad;
-			border-bottom: 1px solid hsla(0,0%,100%,.15);
-			margin-bottom: 4px;
-		}
-		#cdw-back-item a.menu-top,
-		#cdw-back-item a.menu-top:hover,
-		#cdw-back-item a.menu-top:focus {
-			font-size: 13px !important;
-			background: none !important;
-			color: #f0f0f1 !important;
-		}
-		#cdw-back-item,
-		#cdw-back-item.wp-has-current-submenu,
-		#cdw-back-item.current {
-			background: none !important;
-		}
-		#cdw-back-item .dashicons-arrow-left-alt2 {
-			margin-right: 2px;
-		}
-
-		/* Orders nav badge — matches WooCommerce core red circle */
-		#adminmenu .war-nav-order-badge {
-			display: inline-block;
-			min-width: 8px;
-			padding: 0 5px;
-			height: 16px;
-			line-height: 16px;
-			border-radius: 8px;
-			background: #d63638;
-			color: #fff;
-			font-size: 9px;
-			font-weight: 600;
-			text-align: center;
-			margin-left: 5px;
-			vertical-align: middle;
-			position: relative;
-			top: -1px;
-		}
-
-		/* Promoted items: hide by default, only show in drilldown */
-		.cdw-woo-promoted { display: none; }
-
-		/* Hide notification bubbles on Payments and Extensions */
-		.cdw-woo-item .update-plugins,
-		.cdw-woo-item .awaiting-mod { display: none !important; }
-	</style>
-	<?php
-}
-
-// --- Drilldown navigation JS ---
-
-function cdw_rearrange_admin_menu_js() {
-	?>
-	<script>
-	(function() {
-		var menu = document.getElementById('adminmenu');
-		if ( ! menu ) return;
-
-		var items = menu.querySelectorAll(':scope > li');
-
-		function find( partial ) {
-			for ( var i = 0; i < items.length; i++ ) {
-				var a = items[i].querySelector('a');
-				if ( a && a.getAttribute('href') && a.getAttribute('href').indexOf( partial ) !== -1 ) {
-					return items[i];
-				}
-			}
-			return null;
-		}
-
-		function createPromotedItem( href, text, dashicon ) {
-			var li = document.createElement('li');
-			li.className = 'cdw-woo-promoted wp-not-current-submenu menu-top';
-			var a = document.createElement('a');
-			a.href = href;
-			a.className = 'menu-top';
-			a.innerHTML =
-				'<div class="wp-menu-arrow"><div></div></div>' +
-				'<div class="wp-menu-image dashicons-before ' + dashicon + '" aria-hidden="true"><br></div>' +
-				'<div class="wp-menu-name">' + text + '</div>';
-			li.appendChild(a);
-
-			if ( window.location.href.indexOf( href.replace('admin.php?', '') ) !== -1 ) {
-				li.className = 'cdw-woo-promoted wp-has-current-submenu wp-menu-open menu-top';
-				a.className = 'menu-top wp-has-current-submenu wp-menu-open';
-			}
-			return li;
-		}
-
-		var icons = {
-			orders:     'dashicons-text-page',
-			customers:  'dashicons-groups',
-			settings:   'dashicons-admin-settings',
-			status:     'dashicons-info',
-			reports:    'dashicons-chart-area',
-			addons:     'dashicons-admin-plugins',
-			extensions: 'dashicons-admin-plugins'
-		};
-
-		var woo       = document.getElementById('toplevel_page_woocommerce');
-		var dashboard = find('index.php');
-		var products  = find('edit.php?post_type=product');
-		var payments  = find('PAYMENTS_MENU_ITEM');
-		var analytics = find('path=/analytics/overview');
-		var marketing = find('path=/marketing');
-
-		if ( ! woo || ! dashboard ) return;
-
-		var after = dashboard.nextElementSibling;
-		if ( after && after.classList.contains('wp-menu-separator') ) {
-			after = after.nextElementSibling;
-		}
-		menu.insertBefore( woo, after );
-
-		[products, payments, analytics, marketing].filter(Boolean).forEach(function(li) {
-			li.classList.add('cdw-woo-item');
-			var prev = li.previousElementSibling;
-			if (prev && prev.classList.contains('wp-menu-separator')) {
-				prev.classList.add('cdw-woo-sep');
-			}
-			var next = li.nextElementSibling;
-			if (next && next.classList.contains('wp-menu-separator')) {
-				next.classList.add('cdw-woo-sep');
-			}
-		});
-
-		// Coupons: remove from WooCommerce submenu (Marketing already has its own).
-		if (marketing) {
-			woo.querySelectorAll('.wp-submenu li a').forEach(function(a) {
-				if (a.getAttribute('href') && a.getAttribute('href').indexOf('coupons') !== -1) {
-					var li = a.closest('li');
-					if (li) li.style.display = 'none';
-				}
-			});
-		}
-
-		var wooSubItems = [];
-		woo.querySelectorAll('.wp-submenu li a').forEach(function(a) {
-			var href = a.getAttribute('href');
-			var text = a.textContent.trim();
-			if ( href && text && href !== 'admin.php?page=wc-admin' ) {
-				wooSubItems.push({ href: href, text: text });
-			}
-		});
-
-		function findWooSub( partial ) {
-			for ( var i = 0; i < wooSubItems.length; i++ ) {
-				if ( wooSubItems[i].href.indexOf( partial ) !== -1 ) return wooSubItems[i];
-			}
-			return null;
-		}
-
-		var ordersInfo    = findWooSub('wc-orders');
-		var customersInfo = findWooSub('/customers');
-		var settingsInfo  = findWooSub('wc-settings');
-		var statusInfo    = findWooSub('wc-status');
-		var addonsInfo    = findWooSub('wc-addons');
-		var extensionsInfo = findWooSub('/extensions');
-
-		var orderCount = <?php
-			$oc = 0;
-			if ( function_exists( 'wc_orders_count' ) ) {
-				$oc += (int) wc_orders_count( 'processing' );
-				$oc += (int) wc_orders_count( 'on-hold' );
-			} else {
-				global $wpdb;
-				$hpos = $wpdb->prefix . 'wc_orders';
-				if ( $wpdb->get_var( "SHOW TABLES LIKE '$hpos'" ) === $hpos ) {
-					$oc = (int) $wpdb->get_var( "SELECT COUNT(*) FROM $hpos WHERE status IN ('wc-processing', 'wc-on-hold')" );
-				}
-			}
-			echo (int) $oc;
-		?>;
-
-		var ordersLabel = 'Orders';
-		if ( orderCount > 0 ) {
-			ordersLabel += ' <span class="war-nav-order-badge">' + orderCount + '</span>';
-		}
-
-		var orders = ordersInfo ? createPromotedItem( ordersInfo.href, ordersLabel, icons.orders ) : null;
-		var customers = customersInfo ? createPromotedItem( customersInfo.href, customersInfo.text, icons.customers ) : null;
-
-		function createSettingsWithSubmenu( baseHref ) {
-			var tabs = [
-				{ label: 'General',            href: 'admin.php?page=wc-settings&tab=general' },
-				{ label: 'Products',           href: 'admin.php?page=wc-settings&tab=products' },
-				{ label: 'Tax',                href: 'admin.php?page=wc-settings&tab=tax' },
-				{ label: 'Shipping',           href: 'admin.php?page=wc-settings&tab=shipping' },
-				{ label: 'Payments',           href: 'admin.php?page=wc-settings&tab=checkout' },
-				{ label: 'Accounts & Privacy', href: 'admin.php?page=wc-settings&tab=account' },
-				{ label: 'Emails',             href: 'admin.php?page=wc-settings&tab=email' },
-				{ label: 'Integration',        href: 'admin.php?page=wc-settings&tab=integration' },
-				{ label: 'Site Visibility',    href: 'admin.php?page=wc-settings&tab=site-visibility' },
-				{ label: 'Advanced',           href: 'admin.php?page=wc-settings&tab=advanced' },
-			];
-
-			var loc        = window.location.href;
-			var onSettings = loc.indexOf('page=wc-settings') !== -1;
-			var tabMatch   = loc.match(/[?&]tab=([^&]+)/);
-			var currentTab = tabMatch ? tabMatch[1] : 'general';
-
-			var li = document.createElement('li');
-			li.className = 'cdw-woo-promoted wp-has-submenu menu-top' +
-				( onSettings ? ' wp-has-current-submenu wp-menu-open' : ' wp-not-current-submenu' );
-
-			var a = document.createElement('a');
-			a.href = baseHref || 'admin.php?page=wc-settings';
-			a.className = 'menu-top' +
-				( onSettings ? ' wp-has-current-submenu wp-menu-open' : ' wp-not-current-submenu wp-has-submenu' );
-			a.innerHTML =
-				'<div class="wp-menu-arrow"><div></div></div>' +
-				'<div class="wp-menu-image dashicons-before dashicons-admin-settings" aria-hidden="true"><br></div>' +
-				'<div class="wp-menu-name">Settings</div>';
-			li.appendChild( a );
-
-			var ul = document.createElement('ul');
-			ul.className = 'wp-submenu wp-submenu-wrap';
-
-			tabs.forEach(function( tab ) {
-				var tabLi = document.createElement('li');
-				var isActive = onSettings && tab.href.indexOf( 'tab=' + currentTab ) !== -1;
-				if ( isActive ) tabLi.className = 'current';
-				var tabA = document.createElement('a');
-				tabA.href = tab.href;
-				tabA.textContent = tab.label;
-				tabLi.appendChild( tabA );
-				ul.appendChild( tabLi );
-			});
-
-			li.appendChild( ul );
-			return li;
-		}
-
-		var settings = createSettingsWithSubmenu( settingsInfo ? settingsInfo.href : null );
-		var status    = statusInfo    ? createPromotedItem( statusInfo.href, statusInfo.text, icons.status ) : null;
-		var addons    = addonsInfo    ? createPromotedItem( addonsInfo.href, addonsInfo.text, icons.addons ) : null;
-		var extensions = extensionsInfo ? createPromotedItem( extensionsInfo.href, 'Extensions', icons.extensions ) : null;
-
-		// Add "Home" to the drilldown if "default to store" is enabled.
-		var storeHome = null;
-		<?php if ( WAR_Admin_Experience_API::is_default_to_store() ) : ?>
-		storeHome = createPromotedItem( 'admin.php?page=war-store-dashboard', 'Dashboard', 'dashicons-dashboard' );
-		<?php endif; ?>
-
-		var drilldownOrder = [
-			storeHome, orders, payments, products, customers, marketing, analytics,
-			settings, extensions, status
-		].filter(Boolean);
-
-		drilldownOrder.forEach(function(li) {
-			menu.appendChild(li);
-		});
-
-		after = dashboard.nextElementSibling;
-		if ( after && after.classList.contains('wp-menu-separator') ) {
-			after = after.nextElementSibling;
-		}
-		menu.insertBefore( woo, after );
-
-		woo.classList.add('cdw-woo-entry');
-
-		drilldownOrder.forEach(function(li) {
-			var next = li.nextElementSibling;
-			if (next && next.classList.contains('wp-menu-separator')) {
-				next.style.display = 'none';
-			}
-		});
-
-		var backItem = document.createElement('li');
-		backItem.id = 'cdw-back-item';
-		backItem.className = 'wp-not-current-submenu menu-top';
-		var backLink = document.createElement('a');
-		backLink.href = '#';
-		backLink.className = 'menu-top';
-		backLink.innerHTML = '<div class="wp-menu-arrow"></div><div class="wp-menu-image dashicons-before dashicons-arrow-left-alt2"></div><div class="wp-menu-name">Back</div>';
-		backItem.appendChild(backLink);
-		menu.insertBefore(backItem, drilldownOrder[0]);
-
-		var headerItem = document.createElement('li');
-		headerItem.id = 'cdw-drilldown-header';
-		var headerLabel = document.createElement('div');
-		headerLabel.className = 'cdw-drilldown-header__label';
-		headerLabel.textContent = 'WooCommerce';
-		headerItem.appendChild(headerLabel);
-		menu.insertBefore(headerItem, drilldownOrder[0]);
-
-		var loc = window.location.href;
-		var isOnWooPage = (
-			loc.indexOf('page=wc-orders') !== -1 ||
-			loc.indexOf('page=wc-admin') !== -1 ||
-			loc.indexOf('post_type=product') !== -1 ||
-			loc.indexOf('post_type=shop_coupon') !== -1 ||
-			loc.indexOf('page=wc-settings') !== -1 ||
-			loc.indexOf('page=wc-status') !== -1 ||
-			loc.indexOf('PAYMENTS_MENU_ITEM') !== -1 ||
-			loc.indexOf('page=product') !== -1 ||
-			loc.indexOf('page=coupons') !== -1 ||
-			loc.indexOf('coupons-moved') !== -1 ||
-			loc.indexOf('page=wc-reports') !== -1 ||
-			loc.indexOf('page=wc-addons') !== -1 ||
-			loc.indexOf('page=war-store-dashboard') !== -1
-		);
-
-		function openDrilldown() {
-			menu.classList.add('cdw-drilldown-open');
-		}
-
-		function closeDrilldown() {
-			menu.classList.remove('cdw-drilldown-open');
-		}
-
-		var wooLink = woo.querySelector('a.menu-top');
-		if (wooLink) {
-			wooLink.addEventListener('click', function(e) {
-				e.preventDefault();
-				e.stopPropagation();
-				window.location.href = <?php echo WAR_Admin_Experience_API::is_default_to_store()
-					? "'admin.php?page=war-store-dashboard'"
-					: "'admin.php?page=wc-orders'"; ?>;
-			});
-		}
-
-		backLink.addEventListener('click', function(e) {
-			e.preventDefault();
-			window.location.href = 'index.php?wp-dashboard=1';
-		});
-
-		if ( isOnWooPage ) {
-			openDrilldown();
-		}
-	})();
-	</script>
-	<?php
-}
-
 // --- WooCommerce page access fixes ---
 
 function cdw_block_product_redirect() {
@@ -860,4 +480,3 @@ function cdw_enqueue_assets( $hook ) {
 		),
 	) );
 }
-
