@@ -1,0 +1,80 @@
+/* Future Woo nav customizations.
+ *
+ * Overrides on the vendored nested-nav rail (WC PR #64712) that are Future
+ * Woo's own preferences, kept OUT of includes/vendor/nested-nav/ so they
+ * survive the vendor dir being deleted when Beau's PR merges upstream.
+ * Loaded on every admin page because the rail is global. Paired with the
+ * PHP relabel in WAR_Nav_Tree_Customizer.
+ */
+
+/* The rail's top item is a "back to the main WordPress dashboard" control,
+ * not a store menu item — but by default it renders identically to Home /
+ * Orders / Products and reads as a peer of them. Relabelled to "Back" in PHP;
+ * here it's set apart visually: smaller, dimmed, and divided from the menu
+ * list with a hairline, so it clearly belongs to a different layer of the nav.
+ *
+ * Scoped to the `.war-rail-back` class that WAR_Nav_Tree_Customizer adds to
+ * the <li> ONLY when the rail is spliced (inside Woo). On the normal WP menu
+ * (Media, Posts, …) the class is absent, so the plain Dashboard item is never
+ * touched.
+ */
+/* Selectors carry `li.menu-top` to out-specify WP core's `#adminmenu
+ * li.menu-top` (which zeroes the border) without resorting to !important. */
+#adminmenu li.menu-top.war-rail-back {
+	border-bottom: 1px solid rgba( 255, 255, 255, 0.12 );
+	margin-bottom: 6px;
+}
+
+#adminmenu li.menu-top.war-rail-back .wp-menu-name {
+	font-size: 12px;
+}
+
+/* Dim the whole control (arrow + label together) so it recedes next to the
+ * full-strength menu items, and brighten it back on hover/focus for feedback.
+ * The rail's blue hover background still applies via the vendored rules. */
+#adminmenu li.menu-top.war-rail-back > a {
+	opacity: 0.6;
+	transition: opacity 0.1s ease-in-out;
+}
+
+#adminmenu li.menu-top.war-rail-back > a:hover,
+#adminmenu li.menu-top.war-rail-back > a:focus {
+	opacity: 1;
+}
+
+/* Rail submenu hover / select states.
+ *
+ * The dark rail overrides resting submenu colors but leaves WP core's "Modern"
+ * scheme in charge of :hover / .current, so hovering a submenu child bled the
+ * admin-blue through three ways: periwinkle text (#7b90ff), a 4px blue inset
+ * left bar (box-shadow), and — because each child sits inside its root <li> —
+ * a solid-blue wash over the whole current-root row. The effect is most obvious
+ * on the Marketing drilldown but applies to every section (Analytics, Settings,
+ * …) identically; WP core's selectors aren't section-specific. Normalize all of
+ * them to the rail's own palette so the states read consistently: white text, a
+ * subtle translucent hover fill, no left bar, no blue wash.
+ *
+ * !important is needed because WP core's color-scheme rules are long, highly
+ * specific selector chains; out-specifying them by hand would be brittle.
+ */
+#adminmenu .wp-submenu a:hover,
+#adminmenu .wp-submenu a:focus,
+#adminmenu .wp-submenu li.current > a,
+#adminmenu .wp-submenu li.current > a:hover,
+#adminmenu .wp-submenu li.current > a:focus {
+	color: #fff !important;
+	box-shadow: none !important;
+}
+
+#adminmenu .wp-submenu li > a:hover,
+#adminmenu .wp-submenu li > a:focus {
+	background-color: rgba( 255, 255, 255, 0.08 ) !important;
+	border-radius: 4px;
+}
+
+/* Hovering a submenu child (or the root link) shouldn't wash the active
+ * section's whole row solid blue — it already reads as active. Keep it stable. */
+#adminmenu li.menu-top.wc-nav-v2-current-root:hover,
+#adminmenu li.menu-top.wc-nav-v2-current-root.opensub {
+	background-color: transparent !important;
+}

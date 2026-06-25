@@ -2,10 +2,18 @@
 	function getFab() { return document.getElementById('war-unified-fab-btn'); }
 	function getMenu() { return document.getElementById('war-unified-menu'); }
 
+	// The FAB's original markup (gear icon + label), captured before the first
+	// loading-spinner swap so it can be restored on failure rather than clobbered.
+	var fabOriginalHTML = null;
+
 	function setLoading( isLoading ) {
 		var fabBtn = getFab();
 		var menu = getMenu();
 		if ( ! fabBtn ) return;
+
+		if ( fabOriginalHTML === null ) {
+			fabOriginalHTML = fabBtn.innerHTML;
+		}
 
 		if ( isLoading ) {
 			fabBtn.classList.add( 'war-state-fab-btn--loading' );
@@ -16,7 +24,7 @@
 		} else {
 			fabBtn.classList.remove( 'war-state-fab-btn--loading' );
 			fabBtn.disabled = false;
-			fabBtn.textContent = 'States';
+			fabBtn.innerHTML = fabOriginalHTML;
 		}
 	}
 
@@ -82,29 +90,10 @@
 
 		var formData = new FormData();
 
-		if ( id === 'war-redesign-toggle' ) {
-			formData.append( 'action', 'cdw_toggle_redesign' );
-			formData.append( 'nonce', e.target.getAttribute('data-nonce') || getNonce('cdwNonce') );
-			postAndReload( e.target.getAttribute('data-ajax-url') || getAjaxUrl(), formData );
-			return;
-		}
-
-		if ( id === 'war-plugin-toggle' ) {
-			formData.append( 'action', 'war_toggle_plugin' );
-			formData.append( 'nonce', getNonce('nonce') );
-			formData.append( 'enabled', e.target.checked ? '1' : '0' );
-			postAndReload( getAjaxUrl(), formData );
-			return;
-		}
-
-		if ( id === 'war-default-store-toggle' || id === 'war-store-menu-toggle' ) {
-			var optionMap = {
-				'war-default-store-toggle': 'war_default_to_store',
-				'war-store-menu-toggle': 'war_show_store_menu'
-			};
+		if ( id === 'war-store-menu-toggle' ) {
 			formData.append( 'action', 'war_toggle_admin_experience' );
 			formData.append( 'nonce', getNonce('nonce') );
-			formData.append( 'option', optionMap[ id ] );
+			formData.append( 'option', 'war_show_store_menu' );
 			formData.append( 'value', e.target.checked ? 'yes' : 'no' );
 			postAndReload( getAjaxUrl(), formData );
 			return;

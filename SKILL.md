@@ -20,26 +20,31 @@ You're being asked to add to or modify the Future Woo plugin (this repo, `future
 
 - **PHP layer** (`includes/`, 28 classes, ~7 K LOC): hooks into WP/WC, registers admin pages, handles AJAX, runs the State Switcher backend, creates/deletes demo data.
 - **React/JS layer** (`src/`, `client/`, `assets/js/`): self-contained bundles per surface. Order view is React + DataViews. Settings uses `@wordpress/components` and `@wordpress/ui`. Built with `@wordpress/scripts`.
-- **State Switcher** (`includes/class-unified-state-switcher.php` + `assets/js/unified-state-switcher.js`): the floating "States" button. Toggles between *new store*, *being set up*, *active store*. On switch, it fires AJAX → backend deletes existing demo data, creates new demo data for the chosen state, reloads.
+- **Configure-prototype FAB** (`includes/class-unified-state-switcher.php` + `assets/js/unified-state-switcher.js`): the floating "Configure prototype" button (gear icon). Switches demo store-states (*new store* / *being set up* / *active store*) via AJAX → backend swaps demo data → reload. **Two-FAB gotcha:** `includes/class-dashboard-state-switcher.php` (`CDW_State_Switcher`) is legacy and is NOT rendered — only its AJAX + state-helper methods are still wired. Put any FAB UI in the *unified* switcher, never there. (Two scripts drive the FAB: the inline `<script>` in `render_fab()` and the enqueued JS — keep both in sync.)
+- **Shared page header** (`includes/class-custom-header.php` + `assets/css/custom-header.css`): `WAR_Custom_Header` renders the `.war-page-header` bar on all Woo pages, gated by `is_woo_page()` — which matches `wc-*`, `woocommerce`, **and** Future Woo's own `war-*` page slugs (so the Store Dashboard gets it too). JS moves the bar into `#wpbody-content` so `position: sticky` works.
+- **Nav rail** is vendored (`includes/vendor/nested-nav/`, WC PR #64712). Future Woo's customizations live in `includes/class-nav-tree-customizer.php` — the **durable FW layer that survives the vendor dir being deleted** when the PR merges upstream. Put nav tweaks there (Home → Store Dashboard remap, the "Back" relabel + styling, hiding stray menus, the Marketing sub-items Overview/Campaigns/Coupons), NOT in the vendored files. It gates on the splicer's own signals (e.g. the back link's arrow icon) so it only acts when the rail is actually spliced (inside Woo), matching the splicer's "is this a Woo page?" decision without coupling to its internals.
 
 ## Surfaces this plugin replaces or adds
 
 | Surface | Files |
 |---|---|
-| WP Dashboard widgets | `includes/class-store-status-widget.php`, `class-store-stats-widget.php`, `class-store-management-widget.php`, `class-store-inbox-widget.php`, `class-store-setup-widget.php`, `class-whats-next-widget.php` |
-| Store Dashboard (alt landing) | `includes/class-store-dashboard.php` |
+| Shared page header | `includes/class-custom-header.php` + `assets/css/custom-header.css` (`WAR_Custom_Header`; on Woo pages via `is_woo_page()`, incl. `war-*` slugs) |
+| Nav rail (vendored) + FW tweaks | `includes/vendor/nested-nav/` (WC PR #64712) + `includes/class-nav-tree-customizer.php` (durable FW layer) + `assets/css/nav-customizations.css` |
+| Store Dashboard ("Home" — rail's Home item points here) | `includes/class-store-dashboard.php` |
+| WP Dashboard widgets | `includes/class-store-status-widget.php`, `class-stats-widget.php`, `class-store-management-widget.php`, `class-woo-inbox-widget.php`, `class-woo-setup-widget.php`, `class-whats-next-widget.php` |
 | Order edit | `includes/class-order-page.php` + `src/order-view/` |
 | Orders list | `includes/class-orders-list-page.php` + `client/dataviews-tables/` |
-| Settings tabs (General, Products, Account, Tax, Site Visibility, Advanced) | `includes/class-modern-settings-*.php` + `src/settings/` |
-| Shipping setup | `includes/class-shipping-setup-page.php` + `assets/css/shipping-setup.css` |
-| Admin bar Store menu | `includes/class-store-admin-bar-menu.php` |
-| State Switcher FAB | `includes/class-unified-state-switcher.php` + `assets/js/unified-state-switcher.js` |
+| Settings tabs (General, Products, Account, Tax, Site Visibility, Advanced) | `includes/class-wc-settings-modern.php` + `src/settings/` |
+| Shipping setup | `includes/class-shipping-setup-admin.php` + `assets/css/shipping-setup.css` |
+| Multichannel Campaigns (Marketing → Campaigns) | `includes/class-mcc-admin-page.php` (registration + enqueue) + `includes/class-mcc-rest.php` (`/mcc/v1/` routes) + `includes/class-mcc-data.php` (static demo data) + `src/campaigns/` → built to `assets/js/campaigns/`. Vendored from the standalone `multichannel-campaigns` prototype; a wc-admin React extension page, not a native FW PHP page. |
+| Admin bar Store menu | `includes/class-admin-bar-menu.php` |
+| Configure-prototype FAB | `includes/class-unified-state-switcher.php` + `assets/js/unified-state-switcher.js` |
 
 ## How to add a new designed screen
 
 1. **Decide where it lives.** A new admin submenu page? An override of an existing WC page? A new dashboard widget?
 2. **Create a PHP class in `includes/`.** Follow the naming `class-<surface>-page.php` or `class-<surface>-widget.php`. Hook in via the plugin entry point (`woo-admin-revamp.php`).
-3. **If React:** add an entry in `src/<surface>/index.js`, update `package.json` build script to emit it, and enqueue the compiled bundle conditionally (only on the page that needs it).
+3. **If React:** add the source under `src/<surface>/`, add an entry object to the array in `webpack.config.js` (output to `assets/js/<surface>/`), and enqueue the compiled bundle conditionally (only on the page that needs it). See the `campaigns` entry for the pattern, including the WooCommerce dependency-extraction setup if you import `@woocommerce/*`.
 4. **Style it** per `docs/design-principles.md`. Don't hardcode admin-blue literals — use `var(--wp-admin-theme-color, #3858e9)`. Use `@wordpress/ui` components first, falling back as documented.
 5. **Wire it into the State Switcher** if the screen has demo data. The pattern: read `get_option('war_global_state')`, render different content per state. Optionally add per-screen toggles in your class if the screen has its own iteration variants.
 6. **Update the README's "What it demonstrates" list** so anyone scanning the repo knows the surface exists.
@@ -99,10 +104,23 @@ Precedent: Beau's `woocommerce_admin_menu_tree` filter respected `url` overrides
 
 ```bash
 npm install                       # install pinned @wordpress/* deps
-npm run build                     # build src/settings/index.js → assets/js/settings/
+npm run build                     # build all surfaces (see webpack.config.js)
 npm run start                     # watch mode
 npm run lint:js                   # lint src/
+npm run ts:check                  # type-check the TypeScript surfaces (src/campaigns/)
 ```
+
+The build is a webpack **array (multi-compiler)** config (`webpack.config.js`), one entry per
+self-contained surface, so `npm run build` emits every bundle in one pass:
+
+- `src/settings/index.js` → `assets/js/settings/settings-general.js` (default `@wordpress/scripts` config)
+- `src/campaigns/index.tsx` → `assets/js/campaigns/index.js` (WooCommerce dependency-extraction
+  plugin + `BUNDLED_PACKAGES` for `@wordpress/ui` and `@wordpress/dataviews`, which aren't script
+  handles on this WP/Gutenberg yet — drop them from the set as the handles ship upstream)
+
+To add another React surface, add an entry object to the array rather than changing the build
+script. TypeScript surfaces transpile via Babel (no type-check at build time); run `npm run ts:check`
+for types.
 
 After PHP changes: just reload the admin page (no build step needed).
 

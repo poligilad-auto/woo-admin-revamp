@@ -14,6 +14,8 @@ const DEFAULT_CONFIG = {
 	featureFlags: [],
 	trackedPullRequests: [],
 	patchAdapters: [],
+	surfacePolicies: [],
+	pullRequestSearches: [],
 };
 
 const normalizeText = ( value ) => String( value ?? '' ).trim().toLowerCase();
@@ -57,6 +59,8 @@ export function loadConfigFromString( source ) {
 		featureFlags: Array.isArray( parsed.featureFlags ) ? parsed.featureFlags : [],
 		trackedPullRequests: Array.isArray( parsed.trackedPullRequests ) ? parsed.trackedPullRequests : [],
 		patchAdapters: Array.isArray( parsed.patchAdapters ) ? parsed.patchAdapters : [],
+		surfacePolicies: Array.isArray( parsed.surfacePolicies ) ? parsed.surfacePolicies : [],
+		pullRequestSearches: Array.isArray( parsed.pullRequestSearches ) ? parsed.pullRequestSearches : [],
 	};
 }
 
@@ -73,6 +77,47 @@ const authorName = ( pullRequest ) => normalizeText(
 		? pullRequest.author.login ?? pullRequest.author.name
 		: pullRequest.author
 );
+
+const dateFromLookback = ( now, lookbackDays ) => {
+	const date = new Date( now );
+	date.setUTCDate( date.getUTCDate() - lookbackDays );
+	return date.toISOString().slice( 0, 10 );
+};
+
+const defaultPullRequestSearches = ( config ) => [
+	{
+		id: 'recent-merged',
+		label: 'Recent merged Woo PRs',
+		state: 'merged',
+		dateQualifier: 'merged',
+		lookbackDays: config.lookbackDays,
+		limit: config.maxPullRequests,
+	},
+];
+
+export function buildPullRequestSearchQueries( config, { now = new Date(), since } = {} ) {
+	const configuredSearches = config.pullRequestSearches?.length
+		? config.pullRequestSearches
+		: defaultPullRequestSearches( config );
+
+	return configuredSearches.flatMap( ( search ) => {
+		const dateQualifier = search.dateQualifier ?? 'merged';
+		const date = since ?? search.since ?? dateFromLookback( now, search.lookbackDays ?? config.lookbackDays );
+		const baseQuery = search.query ?? `${ dateQualifier }:>=${ date }`;
+		const authors = normalizeList( search.authors );
+		const queryParts = authors.length
+			? authors.map( ( author ) => `${ baseQuery } author:${ author }` )
+			: [ baseQuery ];
+
+		return queryParts.map( ( query ) => ( {
+			id: search.id ?? search.label ?? query,
+			label: search.label ?? search.id ?? query,
+			state: search.state ?? 'merged',
+			limit: Number( search.limit ?? config.maxPullRequests ),
+			query,
+		} ) );
+	} );
+}
 
 export function scorePullRequest( pullRequest, config ) {
 	const labels = labelNames( pullRequest );
@@ -219,16 +264,108 @@ export function matchPatchAdapters( candidates, config ) {
 	} );
 }
 
+export function classifyCandidateIntent( candidate ) {
+	const labels = labelNames( candidate );
+	const searchableText = normalizeText( [
+		candidate.title,
+		candidate.body,
+		candidate.headRefName,
+		...( candidate.reasons ?? [] ),
+	].filter( Boolean ).join( ' ' ) );
+
+	if (
+		labels.some( ( label ) => [ 'feature flag', 'experimental', 'experiment' ].includes( label ) ) ||
+		/\b(feature flag|behind a flag|behind flag|experiment|experimental)\b/.test( searchableText )
+	) {
+		return 'feature-flag';
+	}
+
+	if (
+		labels.some( ( label ) => [ 'bug', 'bugfix', 'regression' ].includes( label ) ) ||
+		/^(fix|fixes|fixed|bugfix|bug fix)\b/.test( searchableText ) ||
+		/\b(regression|bug)\b/.test( searchableText )
+	) {
+		return 'bugfix';
+	}
+
+	if (
+		labels.some( ( label ) => [ 'design', 'ux', 'prototype' ].includes( label ) ) ||
+		/\b(redesign|vision|prototype|concept)\b/.test( searchableText )
+	) {
+		return 'vision-change';
+	}
+
+	return 'default';
+}
+
+const defaultActionForMode = ( mode ) => {
+	switch ( normalizeText( mode ) ) {
+		case 'vision-owned':
+			return 'report-only';
+		case 'hybrid':
+			return 'draft-pr';
+		case 'mirror-owned':
+			return 'self-merge';
+		default:
+			return 'draft-pr';
+	}
+};
+
+const actionForSurfaceIntent = ( surface, intent ) => {
+	const intake = surface.intake ?? {};
+	return intake[ intent ] ?? intake.default ?? defaultActionForMode( surface.mode );
+};
+
+export function classifySurfaceDecisions( candidates, config ) {
+	return ( config.surfacePolicies ?? [] ).flatMap( ( surface ) => {
+		return candidates
+			.map( ( candidate ) => ( {
+				candidate,
+				matchedBy: matchRuleReasons( candidate, surface.matches ),
+			} ) )
+			.filter( ( match ) => match.matchedBy.length > 0 )
+			.map( ( match ) => {
+				const intent = classifyCandidateIntent( match.candidate );
+				return {
+					surfaceId: surface.id,
+					label: surface.label ?? surface.id,
+					mode: surface.mode ?? 'hybrid',
+					owner: surface.owner,
+					reviewPath: surface.reviewPath,
+					notes: Array.isArray( surface.notes ) ? surface.notes : [],
+					candidate: match.candidate,
+					intent,
+					action: actionForSurfaceIntent( surface, intent ),
+					matchedBy: match.matchedBy,
+				};
+			} );
+	} );
+}
+
+export function resolveGateStatus( verificationStatus, surfaceDecisions = [] ) {
+	if ( normalizeText( verificationStatus ) !== 'merge' ) {
+		return 'hold';
+	}
+
+	const needsHumanReview = surfaceDecisions.some( ( decision ) => {
+		return [ 'draft-pr', 'hold' ].includes( normalizeText( decision.action ) );
+	} );
+
+	return needsHumanReview ? 'hold' : 'merge';
+}
+
 const checkbox = ( ok ) => ok ? 'pass' : 'fail';
 
 export function buildDesignerReport( {
 	config,
 	candidates,
 	adapterMatches = matchPatchAdapters( candidates, config ),
+	surfaceDecisions = classifySurfaceDecisions( candidates, config ),
 	gate = { status: 'pending', checks: [] },
 	now = new Date(),
 } ) {
 	const date = now.toISOString().slice( 0, 10 );
+	const searchQueries = buildPullRequestSearchQueries( config, { now } );
 	const lines = [
 		'# Future Woo intake report',
 		'',
@@ -238,7 +375,7 @@ export function buildDesignerReport( {
 		'',
 		'## What the bot checked',
 		'',
-		`- Recent merged Woo PRs from the last ${ config.lookbackDays } days.`,
+		...searchQueries.map( ( search ) => `- ${ search.label }: ${ search.state } PRs matching \`${ search.query }\`.` ),
 		'- Design-facing labels, paths, keywords, tracked people, and explicitly tracked PRs.',
 		'- Future Woo feature flags that should be forced on for the prototype.',
 		'',
@@ -283,6 +420,9 @@ export function buildDesignerReport( {
 			if ( candidate.author ) {
 				lines.push( `Author: ${ candidate.author }` );
 			}
+			if ( candidate.sourceSearches?.length ) {
+				lines.push( `Source search: ${ candidate.sourceSearches.join( '; ' ) }` );
+			}
 			if ( candidate.reasons.length ) {
 				lines.push( `Why it matched: ${ candidate.reasons.join( '; ' ) }` );
 			}
@@ -291,6 +431,39 @@ export function buildDesignerReport( {
 				for ( const file of candidate.files.slice( 0, 8 ) ) {
 					lines.push( `- ${ file }` );
 				}
+			}
+			lines.push( '' );
+		}
+	}
+
+	lines.push( '## Surface ownership policy', '' );
+
+	if ( ! surfaceDecisions.length ) {
+		lines.push( 'No surface ownership policies matched this run.' );
+		lines.push( '' );
+	} else {
+		for ( const decision of surfaceDecisions ) {
+			lines.push( `### ${ decision.label }` );
+			lines.push( `Mode: ${ decision.mode }` );
+			if ( decision.owner ) {
+				lines.push( `Owner: ${ decision.owner }` );
+			}
+			lines.push( `Woo PR: #${ decision.candidate.number } ${ decision.candidate.title }` );
+			lines.push( `Intent: ${ decision.intent }` );
+			lines.push( `Action: ${ decision.action }` );
+			if ( decision.reviewPath ) {
+				lines.push( `Designer review path: ${ decision.reviewPath }` );
+			}
+			if ( decision.matchedBy.length ) {
+				lines.push( `Matched by: ${ decision.matchedBy.join( '; ' ) }` );
+			}
+			if ( decision.action === 'report-only' ) {
+				lines.push( 'Auto-apply: skipped; this stays visible without overwriting the Future Woo surface.' );
+			} else if ( decision.action === 'draft-pr' || decision.action === 'hold' ) {
+				lines.push( 'Auto-merge: held; the bot should leave a draft PR for review.' );
+			}
+			for ( const note of decision.notes ) {
+				lines.push( `- ${ note }` );
 			}
 			lines.push( '' );
 		}
@@ -327,6 +500,7 @@ export function buildDesignerReport( {
 			[
 				...config.featureFlags.map( ( featureFlag ) => featureFlag.reviewPath ),
 				...adapterMatches.map( ( adapterMatch ) => adapterMatch.reviewPath ),
+				...surfaceDecisions.map( ( decision ) => decision.reviewPath ),
 			]
 				.filter( Boolean )
 		),

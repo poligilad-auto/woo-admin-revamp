@@ -28,6 +28,24 @@
 	overflow: visible !important;
 }
 
+/* Run the header (and page content) flush to the admin menu. Core Woo pages
+   get this for free via their `woocommerce-admin-page` body class, which
+   zeroes #wpcontent's default 20px left gutter. Future Woo's own `war-*`
+   pages (e.g. the Store Dashboard) don't carry those classes, so without
+   this they'd show a 20px strip of page background to the left of the
+   header bar. No-op on core Woo pages (already 0). */
+#wpcontent {
+	padding-left: 0 !important;
+}
+
+/* Match core Woo's near-white page background instead of WP's default grey.
+   Same source as the gutter fix: core Woo sets this via its body classes,
+   which `war-*` pages don't get. Reuse the header's token so the page and
+   the header bar stay the same colour. No-op on core Woo pages. */
+body {
+	background-color: var( --war-page-bg, #fcfcfc ) !important;
+}
+
 /* Remove ALL top margin/padding WooCommerce adds for its hidden header */
 .woocommerce-layout__primary,
 .woocommerce-layout,
